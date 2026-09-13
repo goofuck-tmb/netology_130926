@@ -1,100 +1,95 @@
-# Домашнее задание «Docker Compose»
+# Введение в Terraform
 
-## Задача 1
+## Чек-лист
 
-Dockerfile:
+Terraform v1.16.2:
 
-```dockerfile
-FROM nginx:1.29.0
-COPY index.html /usr/share/nginx/html/index.html
+![version](images/terraform_version.png)
+
+## Задание 1
+
+**1.** `terraform init` — провайдеры random и docker скачались (через зеркало).
+
+**2.** Секреты можно хранить в `personal.auto.tfvars` (он в `.gitignore`).
+
+**3.** Секрет из state: `"result": "gc2Qj16Zt24ZvdqV"`
+
+**4.** После `terraform validate` нашёл 4 ошибки:
+- `resource "docker_image" {` — нет имени → `"docker_image" "nginx"`
+- `"1nginx"` — имя не может начинаться с цифры → `"nginx"`
+- `random_string_FAKE` — нет такого ресурса → `random_string`
+- `.resulT` — неверный атрибут → `.result`
+
+После правок: `Success! The configuration is valid.`
+
+**5.** Исправленный фрагмент:
+
+```hcl
+resource "docker_image" "nginx" {
+  name         = "nginx:latest"
+  keep_locally = true
+}
+
+resource "docker_container" "nginx" {
+  image = docker_image.nginx.image_id
+  name  = "example_${random_password.random_string.result}"
+
+  ports {
+    internal = 80
+    external = 9090
+  }
+}
 ```
 
-index.html:
+`docker ps`:
 
-```html
-<html>
-<head>
-Hey, Netology
-</head>
-<body>
-<h1>I will be DevOps Engineer!</h1>
-</body>
-</html>
+```
+CONTAINER ID   IMAGE          COMMAND                  STATUS         PORTS                  NAMES
+2364d4eb8a97   05b8cb60c354   "/docker-entrypoint.…"   Up 4 seconds   0.0.0.0:9090->80/tcp   example_gc2Qj16Zt24ZvdqV
 ```
 
-```bash
-docker build -t maximtmb/custom-nginx:1.0.0 .
-docker push maximtmb/custom-nginx:1.0.0
+**6.** Поменял имя контейнера на `hello_world`, `terraform apply -auto-approve`.
+
+Опасность `-auto-approve`: пропускает подтверждение плана, можно случайно снести/пересоздать ресурсы. Нужен для автоматизации — скрипты и CI/CD, где нажать `yes` некому.
+
+`docker ps`:
+
+```
+CONTAINER ID   IMAGE          COMMAND                  STATUS        PORTS                  NAMES
+eb5e82de7fce   05b8cb60c354   "/docker-entrypoint.…"   Up 9 seconds  0.0.0.0:9090->80/tcp   hello_world
 ```
 
-https://hub.docker.com/r/maximtmb/custom-nginx/general
+**7.** `terraform destroy` → `Resources: 3 destroyed`. terraform.tfstate:
 
-## Задача 2
-
-```bash
-docker run -d --name trishin-custom-nginx-t2 -p 127.0.0.1:8080:80 maximtmb/custom-nginx:1.0.0
-docker rename trishin-custom-nginx-t2 custom-nginx-t2
+```json
+{
+  "version": 4,
+  "terraform_version": "1.16.2",
+  "serial": 11,
+  "lineage": "66812f29-b784-0c59-c2fc-35cb286d5844",
+  "outputs": {},
+  "resources": [],
+  "check_results": null
+}
 ```
 
-![task2](2.png)
+**8.** Образ `nginx:latest` не удалился из-за `keep_locally = true` в `docker_image`.
 
-## Задача 3
+Из документации:
+> `keep_locally` (Boolean) If true, then the Docker image won't be deleted on destroy operation.
 
-Контейнер остановился, потому что через attach мы подключились к главному процессу (nginx, PID 1), а Ctrl-C его завершил. Контейнер живёт пока жив главный процесс.
+## Задание 2*
 
-Проблема (п.10): порт проброшен на 80 (`-p 127.0.0.1:8080:80`), а nginx после правки конфига слушает 81. На 80 никто не отвечает — `Connection reset by peer`.
+Terraform с рабочей станции управляет docker на ВМ через SSH (`host = "ssh://..."`). Поднял `mysql:8`, пароли через `random_password`. Код: [`task2/main.tf`](task2/main.tf).
 
-П.11: порт правится в `hostconfig.json` и `config.v2.json` в `/var/lib/docker/containers/<id>/` при остановленном докере.
+Проверка env в контейнере — пароли разные, всё прокинулось:
 
-```bash
-docker rm custom-nginx-t2 -f
+```
+MYSQL_ROOT_PASSWORD=YZHprvSwolCxHSAe
+MYSQL_PASSWORD=cfZiCqj8TSIfqwbW
+MYSQL_USER=wordpress
+MYSQL_DATABASE=wordpress
+MYSQL_ROOT_HOST=%
 ```
 
-![task3](3.1.png)
-![task3](3.2.png)
-
-## Задача 4
-
-```bash
-docker run -d --name centos -v $(pwd):/data centos:7 sleep infinity
-docker run -d --name debian -v $(pwd):/data debian sleep infinity
-```
-
-Каталог примонтирован в оба контейнера, файлы видны в обоих.
-
-![task4](4.png)
-![task4](4.2.png)
-
-## Задача 5
-
-П.1 — запустился `compose.yaml`, у него приоритет выше, чем у `docker-compose.yaml`.
-
-П.2 — через `include`:
-
-```yaml
-services:
-  portainer:
-    network_mode: host
-    image: portainer/portainer-ce:latest
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-include:
-  - docker-compose.yaml
-```
-
-П.3:
-
-```bash
-docker tag maximtmb/custom-nginx:1.0.0 127.0.0.1:5000/custom-nginx:latest
-docker push 127.0.0.1:5000/custom-nginx:latest
-```
-
-П.7 — после удаления `compose.yaml` вышел warning про orphan-контейнер (portainer больше нет в конфиге):
-
-```bash
-docker compose up -d --remove-orphans
-docker compose down
-```
-
-![task5](5.1.png)
-![task5](5.2.png)
+Ресурсы и ВМ потом удалил.
